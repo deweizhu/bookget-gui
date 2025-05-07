@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <string>    
 #include <tlhelp32.h>
+#include <shlobj.h> // For SHGetFolderPath
 
 std::wstring Util::UnixEpochToDateTime(double value)
 {
@@ -112,6 +113,39 @@ std::wstring Util::GetCurrentExeDirectory()
     std::filesystem::path path(buffer);
     std::wstring filePath = path.parent_path().lexically_normal();
     return filePath;
+}
+
+
+
+std::wstring Util::GetUserHomeDirectory()
+{
+    wchar_t path[MAX_PATH];
+    
+    // CSIDL_PROFILE 表示用户的主目录（通常是 C:\Users\Username）
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr, 0, path)))
+    {
+        return path;
+    }
+    
+    // 如果 SHGetFolderPathW 失败，尝试从环境变量获取
+    wchar_t userProfile[MAX_PATH];
+    size_t requiredSize = 0;
+    if (_wgetenv_s(&requiredSize, userProfile, MAX_PATH, L"USERPROFILE") == 0 && requiredSize > 0)
+    {
+        return userProfile;
+    }
+    
+    // 如果还是失败，尝试组合 HOMEDRIVE 和 HOMEPATH
+    wchar_t homeDrive[MAX_PATH];
+    wchar_t homePath[MAX_PATH];
+    if (_wgetenv_s(&requiredSize, homeDrive, MAX_PATH, L"HOMEDRIVE") == 0 && requiredSize > 0 &&
+        _wgetenv_s(&requiredSize, homePath, MAX_PATH, L"HOMEPATH") == 0 && requiredSize > 0)
+    {
+        return std::wstring(homeDrive) + homePath;
+    }
+    
+    // 所有方法都失败，返回空字符串
+    return L"";
 }
 
 

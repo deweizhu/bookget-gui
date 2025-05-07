@@ -564,7 +564,7 @@ HRESULT BrowserWindow::HandleTabURIUpdate(size_t tabId, ICoreWebView2* webview)
              RETURN_IF_FAILED(error);
              web::json::value jsonObj = web::json::value::parse(L"{}");
              jsonObj[L"html"]  = web::json::value::parse(result);
-             Util::fileWrite(BrowserWindow::GetUserDataDirectory() + L"\\" + g_outHtmlFile, jsonObj[L"html"].as_string());
+             Util::fileWrite(Util::GetUserHomeDirectory() + L"\\bookget\\" + g_outHtmlFile, jsonObj[L"html"].as_string());
              return S_OK;
          }).Get()), L"Can't update favicon");
      }
@@ -726,7 +726,7 @@ HRESULT BrowserWindow::HandleTabNavCompleted(size_t tabId, ICoreWebView2* webvie
              RETURN_IF_FAILED(error);
              web::json::value jsonObj = web::json::value::parse(L"{}");
              jsonObj[L"html"]  = web::json::value::parse(result);
-             Util::fileWrite(BrowserWindow::GetUserDataDirectory() + L"\\" + g_outHtmlFile, jsonObj[L"html"].as_string());
+             Util::fileWrite(Util::GetUserHomeDirectory() + L"\\bookget\\"+ g_outHtmlFile, jsonObj[L"html"].as_string());
              return S_OK;
          }).Get()), L"Can't update favicon");
      }
@@ -969,14 +969,14 @@ std::wstring BrowserWindow::GetAppDataDirectory()
     if (SUCCEEDED(hr))
     {
         dataDirectory = std::wstring(path);
-        dataDirectory.append(L"\\BookGet\\");
+        dataDirectory.append(L"\\Bookget\\");
     }
     else
     {
         dataDirectory = std::wstring(L".\\");
     }
 
-    dataDirectory.append(s_title);
+    //dataDirectory.append(s_title);
     return dataDirectory;
 }
 

@@ -21,6 +21,7 @@ public:
     static bool fileAppend(std::wstring filename, std::wstring data);
     static std::wstring fileRead(std::wstring filename);
     static std::wstring GetCurrentExeDirectory();
+    static std::wstring GetUserHomeDirectory();
 
     static std::wstring BoolToString(BOOL value);
     static std::wstring EncodeQuote(std::wstring raw);

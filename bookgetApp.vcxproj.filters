@@ -80,7 +80,4 @@
     <None Include="ui_bar.html" />
     <None Include="packages.config" />
   </ItemGroup>
-  <ItemGroup>
-    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />
-  </ItemGroup>
 </Project>
