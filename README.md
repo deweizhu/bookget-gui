@@ -16,7 +16,6 @@ gui
 
 # 编译环境
 
-使用 vcpkg 安装依赖
 ​安装 vcpkg​：
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git
