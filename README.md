@@ -23,14 +23,17 @@ git clone https://github.com/microsoft/vcpkg.git
 .\vcpkg\bootstrap-vcpkg.bat
 cd .\vcpkg\
 ```
-​安装 cpprestsdk​：
-```powershell
-.\vcpkg install cpprestsdk:x64-windows
 
 ​集成到 Visual Studio​：
 ```powershell
 .\vcpkg integrate install
 ```
+
+​安装 cpprestsdk​：
+```powershell
+.\vcpkg install cpprestsdk:x64-windows
+```
+
 
 在 Visual Studio 2022 中创建项目后，确保在项目属性中：   
 C/C++ → 常规 → 附加包含目录：添加 vcpkg 的 include 目录   
