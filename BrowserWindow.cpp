@@ -319,6 +319,39 @@ HRESULT BrowserWindow::CreateBrowserControlsWebView()
         RETURN_IF_FAILED(m_controlsWebView->get_Settings(&settings));
         RETURN_IF_FAILED(settings->put_AreDevToolsEnabled(FALSE));
 
+        // 禁用弹窗
+        RETURN_IF_FAILED(settings->put_AreDefaultScriptDialogsEnabled(FALSE));
+
+        // 设置新窗口在当前标签页打开
+        RETURN_IF_FAILED(m_controlsWebView->add_NewWindowRequested(
+            Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+                [this](ICoreWebView2* sender, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT
+        {
+            // 获取请求的URI
+            wil::unique_cotaskmem_string uri;
+            args->get_Uri(&uri);
+            
+            // 在当前WebView中导航到该URI
+            //m_controlsWebView->Navigate(uri.get());
+
+             // 创建新标签页
+            web::json::value jsonObj = web::json::value::parse(L"{}");
+            jsonObj[L"message"] = web::json::value(MG_CREATE_TAB);
+            jsonObj[L"args"] = web::json::value::parse(L"{}");
+            jsonObj[L"args"][L"tabId"] = web::json::value::number(m_tabs.size()); // 使用下一个可用ID
+            jsonObj[L"args"][L"active"] = web::json::value::boolean(true);
+            jsonObj[L"args"][L"uri"] = web::json::value(uri.get());
+    
+            // 发送消息创建新标签页并导航
+            PostJsonToWebView(jsonObj, m_controlsWebView.get());
+    
+            // 取消默认的新窗口行为
+            args->put_Handled(TRUE);
+      
+            
+            return S_OK;
+        }).Get(), &m_newWindowRequestedToken));
+
         RETURN_IF_FAILED(m_controlsController->add_ZoomFactorChanged(Callback<ICoreWebView2ZoomFactorChangedEventHandler>(
             [](ICoreWebView2Controller* host, IUnknown* args) -> HRESULT
         {
@@ -335,6 +368,9 @@ HRESULT BrowserWindow::CreateBrowserControlsWebView()
 
          // 在这里创建第一个标签页
         //CreateInitialTab();
+
+
+        
 
         return S_OK;
     }).Get());
@@ -373,6 +409,35 @@ HRESULT BrowserWindow::CreateBrowserOptionsWebView()
         wil::com_ptr<ICoreWebView2Settings> settings;
         RETURN_IF_FAILED(m_optionsWebView->get_Settings(&settings));
         RETURN_IF_FAILED(settings->put_AreDevToolsEnabled(FALSE));
+
+         // 禁用弹窗
+        RETURN_IF_FAILED(settings->put_AreDefaultScriptDialogsEnabled(FALSE));
+        
+        // 设置新窗口在当前标签页打开
+        RETURN_IF_FAILED(m_optionsWebView->add_NewWindowRequested(
+            Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+                [this](ICoreWebView2* sender, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT
+        {
+            // 获取请求的URI
+            wil::unique_cotaskmem_string uri;
+            args->get_Uri(&uri);
+            
+            // 创建新标签页
+            web::json::value jsonObj = web::json::value::parse(L"{}");
+            jsonObj[L"message"] = web::json::value(MG_CREATE_TAB);
+            jsonObj[L"args"] = web::json::value::parse(L"{}");
+            jsonObj[L"args"][L"tabId"] = web::json::value::number(m_tabs.size()); // 使用下一个可用ID
+            jsonObj[L"args"][L"active"] = web::json::value::boolean(true);
+            jsonObj[L"args"][L"uri"] = web::json::value(uri.get());
+    
+            // 发送消息创建新标签页并导航
+            PostJsonToWebView(jsonObj, m_controlsWebView.get());
+    
+            // 取消默认的新窗口行为
+            args->put_Handled(TRUE);
+            
+            return S_OK;
+        }).Get(), &m_newWindowRequestedToken));
 
         RETURN_IF_FAILED(m_optionsController->add_ZoomFactorChanged(Callback<ICoreWebView2ZoomFactorChangedEventHandler>(
             [](ICoreWebView2Controller* host, IUnknown* args) -> HRESULT
@@ -441,6 +506,13 @@ void BrowserWindow::SetUIMessageBroker()
             size_t id = args.at(L"tabId").as_number().to_uint32();
             bool shouldBeActive = args.at(L"active").as_bool();
             std::unique_ptr<Tab> newTab = Tab::CreateNewTab(m_hWnd, m_contentEnv.get(), id, shouldBeActive);
+
+            // 如果有提供URI，在新标签页中导航
+            if (args.has_field(L"uri"))
+            {
+                std::wstring uri = args.at(L"uri").as_string();
+                newTab->m_contentWebView->Navigate(uri.c_str());
+            }
 
             std::map<size_t, std::unique_ptr<Tab>>::iterator it = m_tabs.find(id);
             if (it == m_tabs.end())
@@ -569,30 +641,6 @@ void BrowserWindow::SetUIMessageBroker()
 
 HRESULT BrowserWindow::SwitchToTab(size_t tabId)
 {
-    //size_t previousActiveTab = m_activeTabId;
-
-    //RETURN_IF_FAILED(m_tabs.at(tabId)->ResizeWebView());
-    //RETURN_IF_FAILED(m_tabs.at(tabId)->m_contentController->put_IsVisible(TRUE));
-    //m_activeTabId = tabId;
-
-    //if (previousActiveTab != INVALID_TAB_ID && previousActiveTab != m_activeTabId) {
-    //    auto previousTabIterator = m_tabs.find(previousActiveTab);
-    //    if (previousTabIterator != m_tabs.end() && previousTabIterator->second &&
-    //        previousTabIterator->second->m_contentController)
-    //    {
-    //        auto hr = m_tabs.at(previousActiveTab)->m_contentController->put_IsVisible(FALSE);
-    //        if (hr == HRESULT_FROM_WIN32(ERROR_INVALID_STATE)) {
-    //            web::json::value jsonObj = web::json::value::parse(L"{}");
-    //            jsonObj[L"message"] = web::json::value(MG_CLOSE_TAB);
-    //            jsonObj[L"args"] = web::json::value::parse(L"{}");
-    //            jsonObj[L"args"][L"tabId"] = web::json::value::number(previousActiveTab);
-
-    //            PostJsonToWebView(jsonObj, m_controlsWebView.get());
-    //        }
-    //        RETURN_IF_FAILED(hr);
-    //    }
-    //}
-
     // 检查标签页是否存在
     if (m_tabs.find(tabId) == m_tabs.end())
     {
@@ -616,7 +664,6 @@ HRESULT BrowserWindow::SwitchToTab(size_t tabId)
             previousTabIterator->second->m_contentController->put_IsVisible(FALSE);
         }
     }
-
 
     return S_OK;
 }
@@ -1314,6 +1361,96 @@ void BrowserWindow::SetupDownloadHandler()
     }
 }
 
+void BrowserWindow::SetupDownloaderHandler(const wchar_t* imagePath)
+{
+    IsInImageDownloadMode = true;
+    if (m_tabs.find(m_activeTabId) != m_tabs.end() && m_tabs.at(m_activeTabId)->m_contentWebView)
+    {
+
+        auto webview10 = m_tabs.at(m_activeTabId)->m_contentWebView.try_query<ICoreWebView2_10>();
+    if (!webview10)
+    {
+        OutputDebugString(L"WebView2 version does not support download API\n");
+        return;
+    }
+
+    // 移除旧的下载监听器（如果存在）
+    if (m_downloadStartingToken.value != 0)
+    {
+        webview10->remove_DownloadStarting(m_downloadStartingToken);
+    }
+
+
+    // 设置新的下载监听器
+    webview10->add_DownloadStarting(
+        Callback<ICoreWebView2DownloadStartingEventHandler>(
+            [this, imagePath](ICoreWebView2* sender, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                wil::com_ptr<ICoreWebView2DownloadOperation> download;
+                RETURN_IF_FAILED(args->get_DownloadOperation(&download));
+                    
+                wil::unique_cotaskmem_string uri;
+                RETURN_IF_FAILED(download->get_Uri(&uri));
+
+                // 处理下载
+                args->put_ResultFilePath(imagePath);
+                args->put_Handled(TRUE);
+                    
+                // 保存下载操作引用
+                m_downloadOperation = download;
+                    
+                  
+
+                // 注册下载进度监听
+                EventRegistrationToken token;
+                HRESULT hr = download->add_BytesReceivedChanged(
+                    Callback<ICoreWebView2BytesReceivedChangedEventHandler>(
+                        [](ICoreWebView2DownloadOperation* download, IUnknown* args) -> HRESULT {
+                            INT64 bytesReceived = 0;
+                            download->get_BytesReceived(&bytesReceived);
+                            UINT64 unsignedBytesReceived = static_cast<UINT64>(bytesReceived);
+            
+                            // 打印进度信息（调试用）
+                            wil::unique_cotaskmem_string uri;
+                            download->get_Uri(&uri);
+                            std::wstring debugMsg = L"Download progress: " + std::to_wstring(bytesReceived) + 
+                                                    L" bytes received for " + std::wstring(uri.get()) + L"\n";
+                            OutputDebugString(debugMsg.c_str());
+            
+                            return S_OK;
+                        }).Get(), &token);
+
+                if (FAILED(hr)) {
+                    OutputDebugString(L"Failed to register BytesReceivedChanged event\n");
+                }
+
+                // 监听状态变更
+                download->add_StateChanged(
+                    Callback<ICoreWebView2StateChangedEventHandler>(
+                        [this, imagePath](ICoreWebView2DownloadOperation* download, IUnknown* args) -> HRESULT {
+                            COREWEBVIEW2_DOWNLOAD_STATE state;
+                            download->get_State(&state);
+                            switch (state) {
+                                case COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS:
+                                    break;
+                                case COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED:
+                                    OutputDebugString(L"Download interrupted\n");
+                                    WriteImagePathToSharedMemory(imagePath, true);
+                                    break;
+                                case COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED:
+                                    OutputDebugString(L"Download completed\n");
+                                    // 下载完成
+                                    WriteImagePathToSharedMemory(imagePath, false);
+                                    break;
+                            }
+                            return S_OK;
+                        }).Get(), &token);
+
+                return S_OK;
+            }).Get(), &m_downloadStartingToken);
+    }
+}
+
+
 
 void BrowserWindow::LoadImageUrlsFromFile()
 {
@@ -1489,7 +1626,7 @@ bool BrowserWindow::InitSharedMemory()
         OutputDebugString(L"Failed to acquire shared memory mutex\n");
         return false;
     }
-    //20994064
+
     // 创建共享内存
     m_hSharedMemory = CreateFileMappingW(
         INVALID_HANDLE_VALUE,
@@ -1558,13 +1695,18 @@ void BrowserWindow::ReadFromSharedMemory()
             m_tabs.at(m_activeTabId)->m_contentWebView)
         {
             sharedData->URLReady = false;//读出来URL就不要再读了
+
+            if (sharedData->imagePath && sharedData->ImageReady) {
+                SetupDownloaderHandler(sharedData->imagePath);
+            }
+
             m_tabs.at(m_activeTabId)->m_contentWebView->Navigate(sharedData->URL);
 
             std::error_code ec;
             if (std::filesystem::exists(sharedData->URL, ec)) {
-                 IsInImageDownloadMode = true;
-                 g_urlsFile = sharedData->URL;
-                   // 设置定时器，等待WebView完全初始化
+                IsInImageDownloadMode = true;
+                g_urlsFile = sharedData->URL;
+                // 设置定时器，等待WebView完全初始化
                 SetTimer(m_hWnd, 2, 1000*5, [](HWND hWnd, UINT, UINT_PTR, DWORD) {
                     KillTimer(hWnd, 2);
                     BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -1575,6 +1717,10 @@ void BrowserWindow::ReadFromSharedMemory()
             }
         }
     }
+
+ 
+
+
 
     // 释放互斥锁
     ReleaseMutex(m_hSharedMemoryMutex);
@@ -1627,6 +1773,33 @@ void BrowserWindow::WriteCookiesToSharedMemory(const std::wstring& cookies)
     size_t copySize = min(cookies.size(), sizeof(sharedData->cookies) / sizeof(wchar_t) - 1);
     wcsncpy_s(sharedData->cookies, cookies.c_str(), copySize);
     sharedData->CookiesReady = true;
+    sharedData->PID = GetCurrentProcessId(); // 更新进程ID
+
+    // 释放互斥锁
+    ReleaseMutex(m_hSharedMemoryMutex);
+}
+
+// 写入IMAGEPATH到共享内存
+void BrowserWindow::WriteImagePathToSharedMemory(const std::wstring& imagePath, bool isReady)
+{
+    if (m_pSharedMemory == nullptr)
+        return;
+
+    // 获取互斥锁
+    DWORD waitResult = WaitForSingleObject(m_hSharedMemoryMutex, 5000);
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        OutputDebugString(L"Failed to acquire mutex for writing HTML\n");
+        return;
+    }
+
+    SharedMemoryData* sharedData = static_cast<SharedMemoryData*>(m_pSharedMemory);
+    
+    // 写入数据
+    size_t copySize = min(imagePath.size(), sizeof(sharedData->imagePath) / sizeof(wchar_t) - 1);
+    wcsncpy_s(sharedData->imagePath, imagePath.c_str(), copySize);
+    sharedData->ImageReady = isReady;
+    sharedData->URLReady = false;
     sharedData->PID = GetCurrentProcessId(); // 更新进程ID
 
     // 释放互斥锁

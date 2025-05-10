@@ -83,7 +83,8 @@ protected:
     HRESULT SwitchToTab(size_t tabId);
     std::wstring GetFilePathAsURI(std::wstring fullPath);
 
-
+private:
+    EventRegistrationToken m_newWindowRequestedToken; // 新窗口请求事件token
 
 // 图片下载相关
 private:
@@ -103,6 +104,8 @@ private:
     void StartDownloadProcess();
     void DownloadNextImageWithNavigate();
     void TriggerDownload(ICoreWebView2* webview);
+
+    void SetupDownloaderHandler(const wchar_t* imagePath);
 
 private:
     // 共享内存相关
@@ -126,16 +129,19 @@ private:
         uint32_t URLReady;
         uint32_t HTMLReady;
         uint32_t CookiesReady;
+        uint32_t ImageReady;
         uint32_t PID; // 添加进程ID标识
         wchar_t URL[1024];  // URL最大长度为1024字符
         wchar_t HTML[1024 * 1024 * 10];  // 10MB HTML缓冲区
         wchar_t cookies[1024 * 10];  // 10KB Cookie缓冲区
+        wchar_t imagePath[1024];  // 图片保存路径（最大1024字符）
     };
     #pragma pack(pop)  // 恢复默认对齐
 
     bool InitSharedMemory();
     void ReadFromSharedMemory();
     void WriteHtmlToSharedMemory(const std::wstring& html);
+    void WriteImagePathToSharedMemory(const std::wstring& imagePath, bool isReady);
     void CleanupSharedMemory();
 
 public:

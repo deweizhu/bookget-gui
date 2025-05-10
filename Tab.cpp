@@ -93,6 +93,25 @@ HRESULT Tab::Init(ICoreWebView2Environment* env, bool shouldBeActive)
             webview2_2->get_CookieManager(&m_cookieManager);
         }
         //! [CookieManager]
+        //! 
+      
+        wil::com_ptr<ICoreWebView2Settings> settings;
+        CHECK_FAILURE(m_contentWebView->get_Settings(&settings));
+        CHECK_FAILURE(settings->put_AreDefaultScriptDialogsEnabled(FALSE));
+        // 设置新窗口在当前标签页打开
+        CHECK_FAILURE(m_contentWebView->add_NewWindowRequested(
+            Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+                [this](ICoreWebView2* sender, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT
+        {
+            // 获取请求的URI
+            wil::unique_cotaskmem_string uri;
+            args->get_Uri(&uri);
+            m_contentWebView->Navigate(uri.get());
+       
+            // 取消默认的新窗口行为
+            args->put_Handled(TRUE);
+            return S_OK;
+        }).Get(), &m_newWindowRequestedToken));
         return S_OK;
     }).Get());
 }

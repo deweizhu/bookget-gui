@@ -36,5 +36,6 @@ protected:
     HRESULT Init(ICoreWebView2Environment* env, bool shouldBeActive);
     void SetMessageBroker();
 
-
+private:
+    EventRegistrationToken m_newWindowRequestedToken; // 新窗口请求事件token
 };
