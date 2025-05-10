@@ -83,6 +83,7 @@ HRESULT Tab::Init(ICoreWebView2Environment* env, bool shouldBeActive)
         }).Get(), &m_securityUpdateToken));
 
       
+        //导条加载默认页
         RETURN_IF_FAILED(m_contentWebView->Navigate(g_sUrl.c_str()));
         browserWindow->HandleTabCreated(m_tabId, shouldBeActive);
 

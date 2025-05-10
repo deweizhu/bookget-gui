@@ -31,7 +31,8 @@
 
 // App specific includes
 #include "resource.h"
-#include "webview2.h"
+#include "WebView2.h"
+#include "WebView2EnvironmentOptions.h"
 
 #define DEFAULT_DPI 96
 #define MIN_WINDOW_WIDTH 510

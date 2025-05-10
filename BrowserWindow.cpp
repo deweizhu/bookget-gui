@@ -9,7 +9,21 @@
 #include "Util.h"
 #include "env.h"
 
+// 在文件顶部添加包含
+#include <fstream>
+#include <sstream>
+#include <shlwapi.h> // for PathCombine
+#pragma comment(lib, "shlwapi.lib")
+
+//#pragma comment(lib, "ole32.lib")
+//#pragma comment(lib, "oleaut32.lib")
+//#pragma comment(lib, "user32.lib")
+//#pragma comment(lib, "WebView2Loader.dll.lib")  // 必须链接 WebView2Loader.lib
+
+
+
 using namespace Microsoft::WRL;
+using Microsoft::WRL::Callback;
 
 WCHAR BrowserWindow::s_windowClass[] = { 0 };
 WCHAR BrowserWindow::s_title[] = { 0 };
@@ -80,55 +94,69 @@ LRESULT CALLBACK BrowserWindow::WndProcStatic(HWND hWnd, UINT message, WPARAM wP
 LRESULT CALLBACK BrowserWindow::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 
-    switch (message)
+  switch (message)
     {
-    case WM_GETMINMAXINFO:
-    {
-        MINMAXINFO* minmax = reinterpret_cast<MINMAXINFO*>(lParam);
-        minmax->ptMinTrackSize.x = m_minWindowWidth;
-        minmax->ptMinTrackSize.y = m_minWindowHeight;
-    }
-    break;
-    case WM_DPICHANGED:
-    {
-        UpdateMinWindowSize();
-    }
-    case WM_SIZE:
-    {
-        ResizeUIWebViews();
-        if (m_tabs.find(m_activeTabId) != m_tabs.end())
+        case WM_APP_DOWNLOAD_NEXT:
         {
-            m_tabs.at(m_activeTabId)->ResizeWebView();
+            m_currentDownloadIndex++;
+            DownloadNextImageWithNavigate();  // 确保调用正确的函数名
         }
-    }
-    break;
-    case WM_CLOSE:
-    {
-        web::json::value jsonObj = web::json::value::parse(L"{}");
-        jsonObj[L"message"] = web::json::value(MG_CLOSE_WINDOW);
-        jsonObj[L"args"] = web::json::value::parse(L"{}");
+        break;
+    
+        case WM_GETMINMAXINFO:
+        {
+            MINMAXINFO* minmax = reinterpret_cast<MINMAXINFO*>(lParam);
+            minmax->ptMinTrackSize.x = m_minWindowWidth;
+            minmax->ptMinTrackSize.y = m_minWindowHeight;
+        }
+        break;
+    
+        case WM_DPICHANGED:
+        {
+            UpdateMinWindowSize();
+        }
+        break;
+    
+        case WM_SIZE:
+        {
+            ResizeUIWebViews();
+            if (m_tabs.find(m_activeTabId) != m_tabs.end())
+            {
+                m_tabs.at(m_activeTabId)->ResizeWebView();
+            }
+        }
+        break;
+    
+        case WM_CLOSE:
+        {
+            web::json::value jsonObj = web::json::value::parse(L"{}");
+            jsonObj[L"message"] = web::json::value(MG_CLOSE_WINDOW);
+            jsonObj[L"args"] = web::json::value::parse(L"{}");
 
-        CheckFailure(PostJsonToWebView(jsonObj, m_controlsWebView.get()), L"Try again.");
-    }
-    break;
-    case WM_NCDESTROY:
-    {
-        SetWindowLongPtr(hWnd, GWLP_USERDATA, NULL);
-        delete this;
-        PostQuitMessage(0);
-    }
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hWnd, &ps);
-        EndPaint(hWnd, &ps);
-    }
-    break;
-    default:
-    {
-        return DefWindowProc(hWnd, message, wParam, lParam);
-    }
-    break;
+            CheckFailure(PostJsonToWebView(jsonObj, m_controlsWebView.get()), L"Try again.");
+        }
+        break;
+    
+        case WM_NCDESTROY:
+        {
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, NULL);
+            delete this;
+            PostQuitMessage(0);
+            return 0;  // 这里直接返回，不需要break
+        }
+    
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            EndPaint(hWnd, &ps);
+        }
+        break;
+    
+        default:
+        {
+            return DefWindowProc(hWnd, message, wParam, lParam);
+        }
     }
     return 0;
 }
@@ -201,6 +229,19 @@ BOOL BrowserWindow::InitInstance(HINSTANCE hInstance, int nCmdShow)
             OutputDebugString(L"UI WebViews environment creation failed\n");
         }
 
+        if (g_cmd == L"-urls" || Util::CheckIfUrlsFileExists()) 
+        {
+            IsInImageDownloadMode = true;
+         // 设置定时器，等待WebView完全初始化
+            SetTimer(m_hWnd, 1, 1000*10, [](HWND hWnd, UINT, UINT_PTR, DWORD) {
+                KillTimer(hWnd, 1);
+                BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+                if (window) {
+                    window->StartDownloadProcess();
+                }
+            });
+        }
+
         return hr;
     }).Get());
 
@@ -267,8 +308,27 @@ HRESULT BrowserWindow::CreateBrowserControlsWebView()
         std::wstring controlsPath = GetFullPathFor(L"gui\\controls_ui\\default.html");
         RETURN_IF_FAILED(m_controlsWebView->Navigate(controlsPath.c_str()));
 
+         // 在这里创建第一个标签页
+        //CreateInitialTab();
+
         return S_OK;
     }).Get());
+}
+
+void BrowserWindow::CreateInitialTab()
+{
+    if (!m_controlsWebView) {
+        OutputDebugString(L"Controls WebView not ready\n");
+        return;
+    }
+
+    web::json::value jsonObj = web::json::value::parse(L"{}");
+    jsonObj[L"message"] = web::json::value(MG_CREATE_TAB);
+    jsonObj[L"args"] = web::json::value::parse(L"{}");
+    jsonObj[L"args"][L"tabId"] = web::json::value::number(0);
+    jsonObj[L"args"][L"active"] = web::json::value::boolean(true);
+    
+    PostJsonToWebView(jsonObj, m_controlsWebView.get());
 }
 
 HRESULT BrowserWindow::CreateBrowserOptionsWebView()
@@ -484,29 +544,54 @@ void BrowserWindow::SetUIMessageBroker()
 
 HRESULT BrowserWindow::SwitchToTab(size_t tabId)
 {
+    //size_t previousActiveTab = m_activeTabId;
+
+    //RETURN_IF_FAILED(m_tabs.at(tabId)->ResizeWebView());
+    //RETURN_IF_FAILED(m_tabs.at(tabId)->m_contentController->put_IsVisible(TRUE));
+    //m_activeTabId = tabId;
+
+    //if (previousActiveTab != INVALID_TAB_ID && previousActiveTab != m_activeTabId) {
+    //    auto previousTabIterator = m_tabs.find(previousActiveTab);
+    //    if (previousTabIterator != m_tabs.end() && previousTabIterator->second &&
+    //        previousTabIterator->second->m_contentController)
+    //    {
+    //        auto hr = m_tabs.at(previousActiveTab)->m_contentController->put_IsVisible(FALSE);
+    //        if (hr == HRESULT_FROM_WIN32(ERROR_INVALID_STATE)) {
+    //            web::json::value jsonObj = web::json::value::parse(L"{}");
+    //            jsonObj[L"message"] = web::json::value(MG_CLOSE_TAB);
+    //            jsonObj[L"args"] = web::json::value::parse(L"{}");
+    //            jsonObj[L"args"][L"tabId"] = web::json::value::number(previousActiveTab);
+
+    //            PostJsonToWebView(jsonObj, m_controlsWebView.get());
+    //        }
+    //        RETURN_IF_FAILED(hr);
+    //    }
+    //}
+
+    // 检查标签页是否存在
+    if (m_tabs.find(tabId) == m_tabs.end())
+    {
+        return E_INVALIDARG;
+    }
+
     size_t previousActiveTab = m_activeTabId;
 
+    // 激活新标签页
     RETURN_IF_FAILED(m_tabs.at(tabId)->ResizeWebView());
     RETURN_IF_FAILED(m_tabs.at(tabId)->m_contentController->put_IsVisible(TRUE));
     m_activeTabId = tabId;
 
-    if (previousActiveTab != INVALID_TAB_ID && previousActiveTab != m_activeTabId) {
+    // 隐藏之前的活动标签页
+    if (previousActiveTab != INVALID_TAB_ID && previousActiveTab != m_activeTabId) 
+    {
         auto previousTabIterator = m_tabs.find(previousActiveTab);
         if (previousTabIterator != m_tabs.end() && previousTabIterator->second &&
             previousTabIterator->second->m_contentController)
         {
-            auto hr = m_tabs.at(previousActiveTab)->m_contentController->put_IsVisible(FALSE);
-            if (hr == HRESULT_FROM_WIN32(ERROR_INVALID_STATE)) {
-                web::json::value jsonObj = web::json::value::parse(L"{}");
-                jsonObj[L"message"] = web::json::value(MG_CLOSE_TAB);
-                jsonObj[L"args"] = web::json::value::parse(L"{}");
-                jsonObj[L"args"][L"tabId"] = web::json::value::number(previousActiveTab);
-
-                PostJsonToWebView(jsonObj, m_controlsWebView.get());
-            }
-            RETURN_IF_FAILED(hr);
+            previousTabIterator->second->m_contentController->put_IsVisible(FALSE);
         }
     }
+
 
     return S_OK;
 }
@@ -704,6 +789,16 @@ HRESULT BrowserWindow::HandleTabNavCompleted(size_t tabId, ICoreWebView2* webvie
     {
         jsonObj[L"args"][L"isError"] = web::json::value::boolean(!navigationSucceeded);
     }
+     // 检查是否处于图片下载模式
+    if (IsInImageDownloadMode)
+    {
+        // 获取当前URL
+         wil::unique_cotaskmem_string source;
+         RETURN_IF_FAILED(webview->get_Source(&source));
+        
+         TriggerDownload(webview);
+    }
+
 
     //! [ Get Cookies ]
     if (g_cmd == L"-i") {
@@ -1022,3 +1117,381 @@ std::wstring BrowserWindow::GetUserDataDirectory() {
     userDataDirectory.append(L"\\User Data");
     return userDataDirectory;
 }
+
+
+
+//std::wstring BrowserWindow::GetNextDownloadFilename()
+//{
+//    std::wstringstream filename;
+//    filename << std::setw(4) << std::setfill(L'0') << m_downloadCounter++;
+//    
+//    // 尝试从URL获取文件扩展名
+//    size_t dotPos = m_imageUrls[m_currentDownloadIndex].find_last_of(L'.');
+//    if (dotPos != std::wstring::npos)
+//    {
+//        std::wstring ext = m_imageUrls[m_currentDownloadIndex].substr(dotPos);
+//        if (ext.length() <= 5) // 假设扩展名不超过5个字符
+//        {
+//            filename << ext;
+//            return filename.str();
+//        }
+//    }
+//    
+//    // 默认使用.jpg
+//    filename << L".jpg";
+//    return filename.str();
+//}
+
+//void BrowserWindow::DownloadImagesFromFile()
+//{
+//    std::wstring urlsFile;
+//    
+//    if (!g_urlsFile.empty()) {
+//        urlsFile = g_urlsFile;
+//    } else {
+//        urlsFile = Util::GetCurrentExeDirectory() + L"\\urls.txt";
+//    }
+//
+//    std::wifstream file(urlsFile);
+//    
+//    if (!file.is_open())
+//    {
+//        OutputDebugString(L"Could not open urls file\n");
+//        return;
+//    }
+//
+//    // 读取所有URL
+//    std::wstring line;
+//    while (std::getline(file, line))
+//    {
+//        if (!line.empty())
+//        {
+//            m_imageUrls.push_back(line);
+//        }
+//    }
+//
+//    if (!m_imageUrls.empty())
+//    {
+//        // 确保downloads目录存在
+//        std::wstring downloadsDir = Util::GetCurrentExeDirectory() + L"\\downloads";
+//        if (!CreateDirectory(downloadsDir.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+//        {
+//            OutputDebugString(L"Could not create downloads directory\n");
+//            return;
+//        }
+//
+//        // 开始下载第一个文件
+//        DownloadNextImageWithNavigate();
+//    }
+//}
+
+//void BrowserWindow::DownloadNextImageWithNavigate()
+//{
+//    if (m_currentDownloadIndex >= m_imageUrls.size())
+//    {
+//        return; // 所有图片下载完成
+//    }
+//
+//    // 确保 WebView 已初始化
+//    if (m_tabs[m_activeTabId]->m_contentWebView)
+//    {
+//        // 导航到当前图片 URL
+//        m_tabs[m_activeTabId]->m_contentWebView->Navigate(m_imageUrls[m_currentDownloadIndex].c_str());
+//
+//        // 设置定时器，延迟后下载下一张图片
+//        SetTimer(m_hWnd, DOWNLOAD_TIMER_ID, DOWNLOAD_DELAY_MS, [](HWND hWnd, UINT msg, UINT_PTR id, DWORD time) {
+//            KillTimer(hWnd, id);
+//            BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+//            if (window)
+//            {
+//                window->m_currentDownloadIndex++;
+//                window->DownloadNextImageWithNavigate();
+//            }
+//        });
+//    }
+//    else
+//    {
+//        OutputDebugString(L"WebView 初始化失败，无法下载图片\n");
+//    }
+//}
+
+void BrowserWindow::StartDownloadProcess()
+{
+    // 确保downloads目录存在
+    std::wstring downloadsDir = Util::GetCurrentExeDirectory() + L"\\downloads";
+    if (!CreateDirectory(downloadsDir.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        OutputDebugString(L"Could not create downloads directory\n");
+        return;
+    }
+
+    // 重置计数器
+    m_downloadCounter = 1;
+    m_currentDownloadIndex = 0;
+
+    // 加载URL列表
+    LoadImageUrlsFromFile();
+
+    if (!m_imageUrls.empty())
+    {
+        // 设置下载处理器
+        SetupDownloadHandler();
+        
+        // 开始第一个下载
+        DownloadNextImage();
+    }
+}
+
+void BrowserWindow::DownloadNextImage()
+{
+    if (m_currentDownloadIndex >= m_imageUrls.size())
+    {
+        OutputDebugString(L"All downloads completed\n");
+        return;
+    }
+
+    if (m_tabs.find(m_activeTabId) != m_tabs.end() && m_tabs.at(m_activeTabId)->m_contentWebView)
+    {
+        OutputDebugString(L"Downloading: ");
+        OutputDebugString(m_imageUrls[m_currentDownloadIndex].c_str());
+        OutputDebugString(L"\n");
+        
+        // 导航到图片URL，这将触发下载
+        m_tabs.at(m_activeTabId)->m_contentWebView->Navigate(m_imageUrls[m_currentDownloadIndex].c_str());
+    }
+}
+
+std::wstring BrowserWindow::GetNextDownloadFilename()
+{
+    std::wstringstream filename;
+    filename << std::setw(4) << std::setfill(L'0') << m_downloadCounter++;
+    filename << L".jpg"; // 默认使用.jpg扩展名
+    return filename.str();
+}
+
+void BrowserWindow::SetupDownloadHandler()
+{
+    if (m_tabs.find(m_activeTabId) != m_tabs.end() && m_tabs.at(m_activeTabId)->m_contentWebView)
+    {
+        auto webview10 = m_tabs.at(m_activeTabId)->m_contentWebView.try_query<ICoreWebView2_10>();
+        if (!webview10)
+        {
+            OutputDebugString(L"WebView2 version does not support download API\n");
+            return;
+        }
+
+        // 移除旧的下载监听器（如果存在）
+        if (m_downloadStartingToken.value != 0)
+        {
+            webview10->remove_DownloadStarting(m_downloadStartingToken);
+        }
+
+
+        // 设置新的下载监听器
+        webview10->add_DownloadStarting(
+            Callback<ICoreWebView2DownloadStartingEventHandler>(
+                [this](ICoreWebView2* sender, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                    wil::com_ptr<ICoreWebView2DownloadOperation> download;
+                    RETURN_IF_FAILED(args->get_DownloadOperation(&download));
+                    
+                    wil::unique_cotaskmem_string uri;
+                    RETURN_IF_FAILED(download->get_Uri(&uri));
+
+                    // 确保下载目录存在
+                    std::wstring downloadsDir = Util::GetCurrentExeDirectory() + L"\\downloads";
+                    if (!CreateDirectory(downloadsDir.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+                    {
+                        OutputDebugString(L"Could not create downloads directory\n");
+                        return S_OK;
+                    }
+
+                    // 设置下载路径
+                    std::wstring filename = GetNextDownloadFilename();
+                    std::wstring fullPath = downloadsDir + L"\\" + filename;
+                    
+                    // 处理下载
+                    args->put_ResultFilePath(fullPath.c_str());
+                    args->put_Handled(TRUE);
+                    
+                    // 保存下载操作引用
+                    m_downloadOperation = download;
+                    
+                  
+
+                   // 注册下载进度监听
+                    EventRegistrationToken token;
+                    HRESULT hr = download->add_BytesReceivedChanged(
+                        Callback<ICoreWebView2BytesReceivedChangedEventHandler>(
+                            [](ICoreWebView2DownloadOperation* download, IUnknown* args) -> HRESULT {
+                                INT64 bytesReceived = 0;
+                                download->get_BytesReceived(&bytesReceived);
+                                UINT64 unsignedBytesReceived = static_cast<UINT64>(bytesReceived);
+            
+                                // 打印进度信息（调试用）
+                                wil::unique_cotaskmem_string uri;
+                                download->get_Uri(&uri);
+                                std::wstring debugMsg = L"Download progress: " + std::to_wstring(bytesReceived) + 
+                                                      L" bytes received for " + std::wstring(uri.get()) + L"\n";
+                                OutputDebugString(debugMsg.c_str());
+            
+                                return S_OK;
+                            }).Get(), &token);
+
+                    if (FAILED(hr)) {
+                        OutputDebugString(L"Failed to register BytesReceivedChanged event\n");
+                    }
+
+                    // 监听状态变更
+                    download->add_StateChanged(
+                        Callback<ICoreWebView2StateChangedEventHandler>(
+                            [this](ICoreWebView2DownloadOperation* download, IUnknown* args) -> HRESULT {
+                                COREWEBVIEW2_DOWNLOAD_STATE state;
+                                download->get_State(&state);
+                                switch (state) {
+                                    case COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS:
+                                        break;
+                                    case COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED:
+                                        OutputDebugString(L"Download interrupted\n");
+                                        // 下载失败也继续下一个
+                                        PostMessage(m_hWnd, WM_APP_DOWNLOAD_NEXT, 0, 0);
+                                        break;
+                                    case COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED:
+                                          OutputDebugString(L"Download completed\n");
+                                        // 下载完成后继续下一个
+                                         PostMessage(m_hWnd, WM_APP_DOWNLOAD_NEXT, 0, 0);
+                                        break;
+                                }
+                                return S_OK;
+                            }).Get(), &token);
+
+                    return S_OK;
+                }).Get(), &m_downloadStartingToken);
+    }
+}
+
+
+void BrowserWindow::LoadImageUrlsFromFile()
+{
+    std::wstring urlsFile = Util::GetCurrentExeDirectory() + L"\\urls.txt";
+    std::wifstream file(urlsFile);
+    
+    if (!file.is_open())
+    {
+        OutputDebugString(L"Could not open urls file\n");
+        return;
+    }
+
+    m_imageUrls.clear();
+    std::wstring line;
+    while (std::getline(file, line))
+    {
+        if (!line.empty())
+        {
+            m_imageUrls.push_back(line);
+        }
+    }
+}
+
+void BrowserWindow::DownloadNextImageWithNavigate()
+{
+    if (m_currentDownloadIndex >= m_imageUrls.size())
+    {
+        OutputDebugString(L"All downloads completed\n");
+        return;
+    }
+
+    OutputDebugString(L"Processing download: ");
+    OutputDebugString(m_imageUrls[m_currentDownloadIndex].c_str());
+    OutputDebugString(L"\n");
+
+    if (m_tabs.find(m_activeTabId) != m_tabs.end() && m_tabs.at(m_activeTabId)->m_contentWebView)
+    {
+        // 确保下载处理器已设置
+        SetupDownloadHandler();
+        
+        // 导航到URL
+        m_tabs.at(m_activeTabId)->m_contentWebView->Navigate(m_imageUrls[m_currentDownloadIndex].c_str());
+    }
+    else
+    {
+        OutputDebugString(L"No active tab or webview available, moving to next download\n");
+        PostMessage(m_hWnd, WM_APP_DOWNLOAD_NEXT, 0, 0);
+    }
+}
+
+
+void BrowserWindow::TriggerDownload(ICoreWebView2* webview) {
+  
+
+    // 执行检测脚本
+    webview->ExecuteScript(
+        LR"JS(
+            (function() {
+                try {
+                    return checkAndDownloadImage();
+                } catch(e) {
+                    console.error('Image detection failed:', e);
+                    return false;
+                }
+                
+                function checkAndDownloadImage() {
+                    // 情况1：检查是否是纯图片文档（如直接打开jpg/png）
+                    if (document.contentType && document.contentType.startsWith('image/')) {
+                        downloadImage(window.location.href);
+                        return true;
+                    }
+
+                    // 情况2：检查<body>是否只包含单个<img>标签
+                    const bodyChildren = document.body.children;
+                    if (bodyChildren.length === 1 && bodyChildren[0] instanceof HTMLImageElement) {
+                        downloadImage(bodyChildren[0].src);
+                        return true;
+                    }
+
+                    // 情况3：检查背景图是否是唯一内容
+                    const bgImage = window.getComputedStyle(document.body).backgroundImage;
+                    if (bgImage && bgImage !== 'none' && document.body.innerText.trim() === '') {
+                        const imgUrl = bgImage.replace(/^url$["']?/, '').replace(/["']?$$/, '');
+                        downloadImage(imgUrl);
+                        return true;
+                    }
+
+                    return false;
+
+                    function downloadImage(url) {
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = url.split('/').pop() || 'download';
+                        document.body.appendChild(link);
+                        link.click();
+                        setTimeout(() => document.body.removeChild(link), 100);
+                    }
+                 }
+
+            })()
+        )JS",
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [](HRESULT errorCode, const wchar_t* resultJson) -> HRESULT {
+                if (SUCCEEDED(errorCode)) {
+                    // 如果返回false表示不是图片页面
+                    std::wstring result = Util::ParseJsonBool(resultJson);
+                    if (result == L"true") {
+                        OutputDebugString(L"Image download triggered\n");
+                    }
+                }
+                return S_OK;
+            }).Get());
+
+
+    //// 方法2：用 JS 强制下载（后备方案）
+    //std::wstring js = L"fetch('" + std::wstring(url) + L"')"
+    //    L".then(res => res.blob())"
+    //    L".then(blob => {"
+    //    L"  const a = document.createElement('a');"
+    //    L"  a.href = URL.createObjectURL(blob);"
+    //    L"  a.download = '" + Util::GetFileNameFromUrl(url) + L"';"
+    //    L"  a.click();"
+    //    L"})";
+    //webview->ExecuteScript(js.c_str(), nullptr);
+}
+

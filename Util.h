@@ -30,5 +30,13 @@ public:
     static std::wstring Utf8ToUtf16(const std::string& utf8);
 
     static bool FindProcessExist(const std::wstring);
+    static void Trim(std::wstring& str);
+    static bool CheckIfUrlsFileExists();
+
+    static bool IsImageUrl(const std::wstring& url);
+
+    static std::wstring GetFileNameFromUrl(const std::wstring& url);
+    static bool IsImageContentType(const wchar_t* contentType);
+    static std::wstring ParseJsonBool(const wchar_t* json);
 
 };

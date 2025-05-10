@@ -7,6 +7,12 @@
 #include "framework.h"
 #include "Tab.h"
 
+#define DOWNLOAD_TIMER_ID 1001
+#define DOWNLOAD_DELAY_MS 1000*60  // 10秒延迟
+// 自定义消息定义
+#define WM_APP_DOWNLOAD_COMPLETE (WM_APP + 1)  // 自定义下载完成消息
+#define WM_APP_DOWNLOAD_NEXT (WM_APP + 2)
+
 class BrowserWindow
 {
 public:
@@ -62,6 +68,7 @@ protected:
     BOOL InitInstance(HINSTANCE hInstance, int nCmdShow);
     HRESULT InitUIWebViews();
     HRESULT CreateBrowserControlsWebView();
+    void CreateInitialTab();
     HRESULT CreateBrowserOptionsWebView();
     HRESULT ClearContentCache();
     HRESULT ClearControlsCache();
@@ -74,4 +81,27 @@ protected:
     HRESULT PostJsonToWebView(web::json::value jsonObj, ICoreWebView2* webview);
     HRESULT SwitchToTab(size_t tabId);
     std::wstring GetFilePathAsURI(std::wstring fullPath);
+
+
+
+// BrowserWindow.h
+private:
+    bool IsInImageDownloadMode = false; //是否处于图片批量下载
+    std::vector<std::wstring> m_imageUrls; // 存储图片URL列表
+    int m_downloadCounter = 1; // 下载计数器
+    int m_currentDownloadIndex = 0; // 当前下载索引
+    wil::com_ptr<ICoreWebView2DownloadOperation> m_downloadOperation; // 下载操作对象
+    EventRegistrationToken m_downloadStartingToken; // 下载开始事件token
+    EventRegistrationToken m_downloadStateChangedToken;  // 添加这行声明
+
+
+    void LoadImageUrlsFromFile();
+    void SetupDownloadHandler();
+    std::wstring GetNextDownloadFilename();
+    void DownloadNextImage();
+    void StartDownloadProcess();
+    void DownloadNextImageWithNavigate();
+    void TriggerDownload(ICoreWebView2* webview);
+
 };
+

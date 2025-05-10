@@ -43,6 +43,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
            g_arguments.push_back(std::make_pair(cmd, g_outHtmlFile));
            i++;
        }
+       else if (cmd == L"-urls") {  // 新增处理urls参数
+           g_urlsFile = arguments[i+1];
+           g_arguments.push_back(std::make_pair(cmd, g_urlsFile));
+           i++;
+       }
     }
     LocalFree(arguments);
 

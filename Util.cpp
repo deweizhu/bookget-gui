@@ -8,9 +8,11 @@
 #include <regex>
 #include <Windows.h>
 #include <filesystem>
+#include <cwctype>
 #include <string>    
 #include <tlhelp32.h>
 #include <shlobj.h> // For SHGetFolderPath
+#include <algorithm>
 
 std::wstring Util::UnixEpochToDateTime(double value)
 {
@@ -305,4 +307,153 @@ bool Util::FindProcessExist(const std::wstring processName)
     } while (Process32Next(hSnapshot, &pe32));
     CloseHandle(hSnapshot);
     return iCount > 0;
+}
+
+void Util::Trim(std::wstring& str)
+{
+    str.erase(str.begin(), std::find_if(str.begin(), str.end(), [](wchar_t ch) {
+        return !std::iswspace(ch);
+    }));
+    str.erase(std::find_if(str.rbegin(), str.rend(), [](wchar_t ch) {
+        return !std::iswspace(ch);
+    }).base(), str.end());
+}
+
+bool Util::CheckIfUrlsFileExists()
+{
+    // 获取当前可执行文件所在目录
+    WCHAR exePath[MAX_PATH];
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    
+    // 提取目录部分
+    std::wstring exeDir(exePath);
+    size_t lastSlash = exeDir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos)
+    {
+        exeDir = exeDir.substr(0, lastSlash + 1);
+    }
+    
+    // 构建完整文件路径
+    std::wstring urlsFilePath = exeDir + L"urls.txt";
+    
+    // 检查文件是否存在
+    DWORD fileAttributes = GetFileAttributesW(urlsFilePath.c_str());
+    if (fileAttributes == INVALID_FILE_ATTRIBUTES)
+    {
+        // 文件不存在或无法访问
+        return false;
+    }
+    
+    // 检查是否是普通文件
+    return !(fileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+
+bool Util::IsImageUrl(const std::wstring& url)
+{
+    std::wstring lowerUrl = url;
+    std::transform(lowerUrl.begin(), lowerUrl.end(), lowerUrl.begin(), ::tolower);
+
+    return (
+        lowerUrl.ends_with(L".jpg") || 
+        lowerUrl.ends_with(L".jpeg") ||
+        lowerUrl.ends_with(L".png") ||
+        lowerUrl.ends_with(L".gif") ||
+        lowerUrl.ends_with(L".bmp") ||
+        lowerUrl.ends_with(L".webp")
+    );
+}
+
+
+
+std::wstring Util::GetFileNameFromUrl(const std::wstring& url)
+{
+    // 1. 提取路径部分（去掉协议、域名和查询参数）
+    size_t path_start = url.find(L"://");
+    if (path_start != std::wstring::npos) {
+        path_start = url.find(L'/', path_start + 3);
+    } else {
+        path_start = url.find(L'/');
+    }
+    
+    std::wstring path;
+    if (path_start != std::wstring::npos) {
+        size_t query_start = url.find(L'?', path_start);
+        path = url.substr(path_start + 1, 
+                         (query_start != std::wstring::npos) ? 
+                         (query_start - path_start - 1) : std::wstring::npos);
+    } else {
+        path = url;
+    }
+
+    // 2. 解码百分号编码（如 %20 -> 空格）
+    std::wstring decoded_path;
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path[i] == L'%' && i + 2 < path.size()) {
+            int hex_val;
+            std::wistringstream hex_stream(path.substr(i + 1, 2));
+            if (hex_stream >> std::hex >> hex_val) {
+                decoded_path += static_cast<wchar_t>(hex_val);
+                i += 2;
+                continue;
+            }
+        }
+        decoded_path += path[i];
+    }
+
+    // 3. 提取最后一个斜杠后的内容作为文件名
+    size_t last_slash = decoded_path.find_last_of(L"/\\");
+    std::wstring filename = (last_slash != std::wstring::npos) ? 
+                           decoded_path.substr(last_slash + 1) : decoded_path;
+
+    // 4. 如果文件名为空（以斜杠结尾的URL），使用默认名
+    if (filename.empty()) {
+        filename = L"download";
+    }
+
+    // 5. 移除非法文件名字符（Windows系统）
+    static const std::wstring illegal_chars = L"<>:\"/\\|?*";
+    filename.erase(std::remove_if(filename.begin(), filename.end(),
+        [](wchar_t c) { return illegal_chars.find(c) != std::wstring::npos; }),
+        filename.end());
+
+    // 6. 如果处理后为空，再次使用默认名
+    if (filename.empty()) {
+        filename = L"download";
+    }
+
+    // 7. 截断过长的文件名（Windows最大255字符）
+    const size_t max_length = 255;
+    if (filename.length() > max_length) {
+        size_t last_dot = filename.find_last_of(L'.');
+        if (last_dot != std::wstring::npos && last_dot > max_length - 10) {
+            // 保留扩展名
+            std::wstring ext = filename.substr(last_dot);
+            filename = filename.substr(0, max_length - ext.length()) + ext;
+        } else {
+            filename = filename.substr(0, max_length);
+        }
+    }
+
+    return filename;
+}
+
+bool Util::IsImageContentType(const wchar_t* contentType) {
+    static const std::vector<std::wstring> imageTypes = {
+        L"image/jpeg", L"image/png", L"image/gif",
+        L"image/webp", L"image/svg+xml", L"image/bmp"
+    };
+    std::wstring type(contentType);
+    return std::any_of(imageTypes.begin(), imageTypes.end(),
+        [&type](const std::wstring& imgType) {
+            return type.find(imgType) != std::wstring::npos;
+        });
+}
+
+// 解析JSON布尔返回值
+std::wstring Util::ParseJsonBool(const wchar_t* json) {
+    std::wstring str(json);
+    if (str.find(L"true") != std::wstring::npos) return L"true";
+    if (str.find(L"false") != std::wstring::npos) return L"false";
+    return L"";
 }
