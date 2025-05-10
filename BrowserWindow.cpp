@@ -15,10 +15,9 @@
 #include <shlwapi.h> // for PathCombine
 #pragma comment(lib, "shlwapi.lib")
 
-//#pragma comment(lib, "ole32.lib")
-//#pragma comment(lib, "oleaut32.lib")
-//#pragma comment(lib, "user32.lib")
-//#pragma comment(lib, "WebView2Loader.dll.lib")  // 必须链接 WebView2Loader.lib
+#include <filesystem>
+#include <iostream>
+
 
 
 
@@ -126,9 +125,20 @@ LRESULT CALLBACK BrowserWindow::WndProc(HWND hWnd, UINT message, WPARAM wParam, 
             }
         }
         break;
-    
+        case WM_TIMER:
+        {
+            if (wParam == 1) // 共享内存检查定时器
+            {
+                ReadFromSharedMemory();
+            }
+        }
+        break;
+        
         case WM_CLOSE:
         {
+            KillTimer(m_hWnd, 1);
+            CleanupSharedMemory();
+
             web::json::value jsonObj = web::json::value::parse(L"{}");
             jsonObj[L"message"] = web::json::value(MG_CLOSE_WINDOW);
             jsonObj[L"args"] = web::json::value::parse(L"{}");
@@ -175,6 +185,12 @@ BOOL BrowserWindow::LaunchWindow(_In_ HINSTANCE hInstance, _In_ int nCmdShow)
     return TRUE;
 }
 
+// BrowserWindow.cpp
+BrowserWindow::~BrowserWindow()
+{
+    CleanupSharedMemory();
+}
+
 //
 //   FUNCTION: InitInstance(HINSTANCE, int)
 //
@@ -190,6 +206,12 @@ BOOL BrowserWindow::InitInstance(HINSTANCE hInstance, int nCmdShow)
     m_hInst = hInstance; // Store app instance handle
     LoadStringW(m_hInst, IDS_APP_TITLE, s_title, MAX_LOADSTRING);
 
+    // 初始化共享内存
+    if (InitSharedMemory())
+    {
+        ReadFromSharedMemory();
+    }
+
     SetUIMessageBroker();
 
     m_hWnd = CreateWindowW(s_windowClass, s_title, WS_OVERLAPPEDWINDOW,
@@ -199,6 +221,9 @@ BOOL BrowserWindow::InitInstance(HINSTANCE hInstance, int nCmdShow)
     {
         return FALSE;
     }
+
+     // 设置定时器定期检查共享内存
+     SetTimer(m_hWnd, 1, 100, NULL);
 
     // Make the BrowserWindow instance ptr available through the hWnd
     SetWindowLongPtr(m_hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
@@ -229,12 +254,12 @@ BOOL BrowserWindow::InitInstance(HINSTANCE hInstance, int nCmdShow)
             OutputDebugString(L"UI WebViews environment creation failed\n");
         }
 
-        if (g_cmd == L"-urls" || Util::CheckIfUrlsFileExists()) 
+        if (Util::CheckIfUrlsFileExists()) 
         {
             IsInImageDownloadMode = true;
          // 设置定时器，等待WebView完全初始化
-            SetTimer(m_hWnd, 1, 1000*10, [](HWND hWnd, UINT, UINT_PTR, DWORD) {
-                KillTimer(hWnd, 1);
+            SetTimer(m_hWnd, 2, 1000*10, [](HWND hWnd, UINT, UINT_PTR, DWORD) {
+                KillTimer(hWnd, 2);
                 BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
                 if (window) {
                     window->StartDownloadProcess();
@@ -797,34 +822,35 @@ HRESULT BrowserWindow::HandleTabNavCompleted(size_t tabId, ICoreWebView2* webvie
          RETURN_IF_FAILED(webview->get_Source(&source));
         
          TriggerDownload(webview);
+       
     }
+    else {
+         //! [ Get Cookies ]
+      wil::unique_cotaskmem_string source;
+      RETURN_IF_FAILED(webview->get_Source(&source));
+      std::wstring uri(source.get());
+      CheckFailure(m_tabs.at(tabId)->GetCookies(uri), L"");
 
+         //! [Get HTML File]
+        std::wstring getSourceHtml(
+            L"(() => {"
+            L"    return document.documentElement ? document.documentElement.outerHTML : document.body;"
+            L"})();"
+        );
 
-    //! [ Get Cookies ]
-    if (g_cmd == L"-i") {
-         wil::unique_cotaskmem_string source;
-         RETURN_IF_FAILED(webview->get_Source(&source));
-         std::wstring uri(source.get());
-         CheckFailure(m_tabs.at(tabId)->GetCookies(uri), L"");
+        CheckFailure(webview->ExecuteScript(getSourceHtml.c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+        [this, tabId](HRESULT error, PCWSTR result) -> HRESULT
+        {
+            RETURN_IF_FAILED(error);
+            web::json::value jsonObj = web::json::value::parse(L"{}");
+            jsonObj[L"html"]  = web::json::value::parse(result);
+
+            WriteHtmlToSharedMemory(jsonObj[L"html"].as_string());
+            //Util::fileWrite(Util::GetUserHomeDirectory() + L"\\bookget\\"+ g_outHtmlFile, jsonObj[L"html"].as_string());
+            return S_OK;
+        }).Get()), L"Can't update favicon");
     }
-    //! [Get HTML File]
-     if (!g_outHtmlFile.empty()) {
-         std::wstring getSourceHtml(
-             L"(() => {"
-             // html body
-             L"    return document.documentElement ? document.documentElement.outerHTML : document.body;"
-             L"})();"
-         );
-         CheckFailure(webview->ExecuteScript(getSourceHtml.c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
-         [this, tabId](HRESULT error, PCWSTR result) -> HRESULT
-         {
-             RETURN_IF_FAILED(error);
-             web::json::value jsonObj = web::json::value::parse(L"{}");
-             jsonObj[L"html"]  = web::json::value::parse(result);
-             Util::fileWrite(Util::GetUserHomeDirectory() + L"\\bookget\\"+ g_outHtmlFile, jsonObj[L"html"].as_string());
-             return S_OK;
-         }).Get()), L"Can't update favicon");
-     }
+     
     return PostJsonToWebView(jsonObj, m_controlsWebView.get());
 }
 
@@ -1119,102 +1145,6 @@ std::wstring BrowserWindow::GetUserDataDirectory() {
 }
 
 
-
-//std::wstring BrowserWindow::GetNextDownloadFilename()
-//{
-//    std::wstringstream filename;
-//    filename << std::setw(4) << std::setfill(L'0') << m_downloadCounter++;
-//    
-//    // 尝试从URL获取文件扩展名
-//    size_t dotPos = m_imageUrls[m_currentDownloadIndex].find_last_of(L'.');
-//    if (dotPos != std::wstring::npos)
-//    {
-//        std::wstring ext = m_imageUrls[m_currentDownloadIndex].substr(dotPos);
-//        if (ext.length() <= 5) // 假设扩展名不超过5个字符
-//        {
-//            filename << ext;
-//            return filename.str();
-//        }
-//    }
-//    
-//    // 默认使用.jpg
-//    filename << L".jpg";
-//    return filename.str();
-//}
-
-//void BrowserWindow::DownloadImagesFromFile()
-//{
-//    std::wstring urlsFile;
-//    
-//    if (!g_urlsFile.empty()) {
-//        urlsFile = g_urlsFile;
-//    } else {
-//        urlsFile = Util::GetCurrentExeDirectory() + L"\\urls.txt";
-//    }
-//
-//    std::wifstream file(urlsFile);
-//    
-//    if (!file.is_open())
-//    {
-//        OutputDebugString(L"Could not open urls file\n");
-//        return;
-//    }
-//
-//    // 读取所有URL
-//    std::wstring line;
-//    while (std::getline(file, line))
-//    {
-//        if (!line.empty())
-//        {
-//            m_imageUrls.push_back(line);
-//        }
-//    }
-//
-//    if (!m_imageUrls.empty())
-//    {
-//        // 确保downloads目录存在
-//        std::wstring downloadsDir = Util::GetCurrentExeDirectory() + L"\\downloads";
-//        if (!CreateDirectory(downloadsDir.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
-//        {
-//            OutputDebugString(L"Could not create downloads directory\n");
-//            return;
-//        }
-//
-//        // 开始下载第一个文件
-//        DownloadNextImageWithNavigate();
-//    }
-//}
-
-//void BrowserWindow::DownloadNextImageWithNavigate()
-//{
-//    if (m_currentDownloadIndex >= m_imageUrls.size())
-//    {
-//        return; // 所有图片下载完成
-//    }
-//
-//    // 确保 WebView 已初始化
-//    if (m_tabs[m_activeTabId]->m_contentWebView)
-//    {
-//        // 导航到当前图片 URL
-//        m_tabs[m_activeTabId]->m_contentWebView->Navigate(m_imageUrls[m_currentDownloadIndex].c_str());
-//
-//        // 设置定时器，延迟后下载下一张图片
-//        SetTimer(m_hWnd, DOWNLOAD_TIMER_ID, DOWNLOAD_DELAY_MS, [](HWND hWnd, UINT msg, UINT_PTR id, DWORD time) {
-//            KillTimer(hWnd, id);
-//            BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
-//            if (window)
-//            {
-//                window->m_currentDownloadIndex++;
-//                window->DownloadNextImageWithNavigate();
-//            }
-//        });
-//    }
-//    else
-//    {
-//        OutputDebugString(L"WebView 初始化失败，无法下载图片\n");
-//    }
-//}
-
 void BrowserWindow::StartDownloadProcess()
 {
     // 确保downloads目录存在
@@ -1265,9 +1195,24 @@ std::wstring BrowserWindow::GetNextDownloadFilename()
 {
     std::wstringstream filename;
     filename << std::setw(4) << std::setfill(L'0') << m_downloadCounter++;
-    filename << L".jpg"; // 默认使用.jpg扩展名
+    
+    // 尝试从URL获取文件扩展名
+    size_t dotPos = m_imageUrls[m_currentDownloadIndex].find_last_of(L'.');
+    if (dotPos != std::wstring::npos)
+    {
+        std::wstring ext = m_imageUrls[m_currentDownloadIndex].substr(dotPos);
+        if (ext.length() <= 5) // 假设扩展名不超过5个字符
+        {
+            filename << ext;
+            return filename.str();
+        }
+    }
+    
+    // 默认使用.jpg
+    filename << L".jpg";
     return filename.str();
 }
+
 
 void BrowserWindow::SetupDownloadHandler()
 {
@@ -1372,14 +1317,43 @@ void BrowserWindow::SetupDownloadHandler()
 
 void BrowserWindow::LoadImageUrlsFromFile()
 {
-    std::wstring urlsFile = Util::GetCurrentExeDirectory() + L"\\urls.txt";
-    std::wifstream file(urlsFile);
-    
+    std::wstring urlsFile;
+    std::wifstream file;
+
+    // 1. 优先尝试打开全局 g_urlsFile
+    if (!g_urlsFile.empty()) 
+    {
+        file.open(g_urlsFile);
+        if (file.is_open()) 
+        {
+            urlsFile = g_urlsFile;
+            OutputDebugString(L"Successfully opened global urls file\n");
+        }
+        else
+        {
+            OutputDebugString(L"Failed to open global urls file, trying local...\n");
+        }
+    }
+
+    // 2. 如果全局文件未定义或打开失败，尝试本地文件
     if (!file.is_open())
     {
-        OutputDebugString(L"Could not open urls file\n");
+        urlsFile = Util::GetCurrentExeDirectory() + L"\\urls.txt";
+        file.open(urlsFile);
+    
+        if (file.is_open())
+        {
+            OutputDebugString(L"Successfully opened local urls file\n");
+        }
+    }
+
+    // 3. 最终检查是否成功打开了任一文件
+    if (!file.is_open())
+    {
+        OutputDebugString(L"Error: Could not open any urls file (global or local)\n");
         return;
     }
+
 
     m_imageUrls.clear();
     std::wstring line;
@@ -1495,3 +1469,198 @@ void BrowserWindow::TriggerDownload(ICoreWebView2* webview) {
     //webview->ExecuteScript(js.c_str(), nullptr);
 }
 
+
+//共享内存相关
+// 初始化共享内存和互斥锁
+bool BrowserWindow::InitSharedMemory()
+{
+    // 创建互斥锁
+    m_hSharedMemoryMutex = CreateMutexW(nullptr, FALSE, m_sharedMemoryMutexName);
+    if (m_hSharedMemoryMutex == nullptr)
+    {
+        OutputDebugString(L"Failed to create shared memory mutex\n");
+        return false;
+    }
+
+    // 等待获取互斥锁
+    DWORD waitResult = WaitForSingleObject(m_hSharedMemoryMutex, 5000); // 5秒超时
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        OutputDebugString(L"Failed to acquire shared memory mutex\n");
+        return false;
+    }
+    //20994064
+    // 创建共享内存
+    m_hSharedMemory = CreateFileMappingW(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        PAGE_READWRITE,
+        0,
+        m_sharedMemorySize,
+        m_sharedMemoryName);
+
+    if (m_hSharedMemory == nullptr)
+    {
+        OutputDebugString(L"Failed to create shared memory\n");
+        ReleaseMutex(m_hSharedMemoryMutex);
+        return false;
+    }
+
+    // 映射共享内存视图
+    m_pSharedMemory = MapViewOfFile(
+        m_hSharedMemory,
+        FILE_MAP_ALL_ACCESS,
+        0,
+        0,
+        m_sharedMemorySize);
+
+    if (m_pSharedMemory == nullptr)
+    {
+        OutputDebugString(L"Failed to map view of shared memory\n");
+        CloseHandle(m_hSharedMemory);
+        m_hSharedMemory = nullptr;
+        ReleaseMutex(m_hSharedMemoryMutex);
+        return false;
+    }
+
+    // 初始化共享内存结构
+    SharedMemoryData* sharedData = static_cast<SharedMemoryData*>(m_pSharedMemory);
+    ZeroMemory(sharedData, m_sharedMemorySize);
+    sharedData->PID = GetCurrentProcessId(); // 设置当前进程ID
+
+    // 释放互斥锁
+    ReleaseMutex(m_hSharedMemoryMutex);
+
+    return true;
+}
+
+// 读取共享内存
+void BrowserWindow::ReadFromSharedMemory()
+{
+    if (m_pSharedMemory == nullptr)
+        return;
+
+    // 获取互斥锁
+    DWORD waitResult = WaitForSingleObject(m_hSharedMemoryMutex, 5000);
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        OutputDebugString(L"Failed to acquire mutex for reading shared memory\n");
+        return;
+    }
+
+    SharedMemoryData* sharedData = static_cast<SharedMemoryData*>(m_pSharedMemory);
+
+    // 检查是否有新的URL需要处理
+    if (sharedData->URLReady && !sharedData->HTMLReady && sharedData->PID != GetCurrentProcessId())
+    {
+        // 处理URL导航
+        if (m_tabs.find(m_activeTabId) != m_tabs.end() && 
+            m_tabs.at(m_activeTabId)->m_contentWebView)
+        {
+            sharedData->URLReady = false;//读出来URL就不要再读了
+            m_tabs.at(m_activeTabId)->m_contentWebView->Navigate(sharedData->URL);
+
+            std::error_code ec;
+            if (std::filesystem::exists(sharedData->URL, ec)) {
+                 IsInImageDownloadMode = true;
+                 g_urlsFile = sharedData->URL;
+                   // 设置定时器，等待WebView完全初始化
+                SetTimer(m_hWnd, 2, 1000*5, [](HWND hWnd, UINT, UINT_PTR, DWORD) {
+                    KillTimer(hWnd, 2);
+                    BrowserWindow* window = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+                    if (window) {
+                        window->StartDownloadProcess();
+                    }
+                });
+            }
+        }
+    }
+
+    // 释放互斥锁
+    ReleaseMutex(m_hSharedMemoryMutex);
+}
+
+// 写入HTML到共享内存
+void BrowserWindow::WriteHtmlToSharedMemory(const std::wstring& html)
+{
+    if (m_pSharedMemory == nullptr)
+        return;
+
+    // 获取互斥锁
+    DWORD waitResult = WaitForSingleObject(m_hSharedMemoryMutex, 5000);
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        OutputDebugString(L"Failed to acquire mutex for writing HTML\n");
+        return;
+    }
+
+    SharedMemoryData* sharedData = static_cast<SharedMemoryData*>(m_pSharedMemory);
+    
+    // 写入HTML数据
+    size_t copySize = min(html.size(), sizeof(sharedData->HTML) / sizeof(wchar_t) - 1);
+    wcsncpy_s(sharedData->HTML, html.c_str(), copySize);
+    sharedData->HTMLReady = true;
+    sharedData->URLReady = false;
+    sharedData->PID = GetCurrentProcessId(); // 更新进程ID
+
+    // 释放互斥锁
+    ReleaseMutex(m_hSharedMemoryMutex);
+}
+
+// 写入Cookies到共享内存
+void BrowserWindow::WriteCookiesToSharedMemory(const std::wstring& cookies)
+{
+    if (m_pSharedMemory == nullptr)
+        return;
+
+    // 获取互斥锁
+    DWORD waitResult = WaitForSingleObject(m_hSharedMemoryMutex, 5000);
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        OutputDebugString(L"Failed to acquire mutex for writing cookies\n");
+        return;
+    }
+
+    SharedMemoryData* sharedData = static_cast<SharedMemoryData*>(m_pSharedMemory);
+    
+    // 写入Cookies数据
+    size_t copySize = min(cookies.size(), sizeof(sharedData->cookies) / sizeof(wchar_t) - 1);
+    wcsncpy_s(sharedData->cookies, cookies.c_str(), copySize);
+    sharedData->CookiesReady = true;
+    sharedData->PID = GetCurrentProcessId(); // 更新进程ID
+
+    // 释放互斥锁
+    ReleaseMutex(m_hSharedMemoryMutex);
+}
+
+// 清理共享内存资源
+void BrowserWindow::CleanupSharedMemory()
+{
+    // 获取互斥锁
+    if (m_hSharedMemoryMutex)
+    {
+        WaitForSingleObject(m_hSharedMemoryMutex, INFINITE);
+    }
+
+    // 清理共享内存映射
+    if (m_pSharedMemory)
+    {
+        UnmapViewOfFile(m_pSharedMemory);
+        m_pSharedMemory = nullptr;
+    }
+    
+    // 关闭共享内存句柄
+    if (m_hSharedMemory)
+    {
+        CloseHandle(m_hSharedMemory);
+        m_hSharedMemory = nullptr;
+    }
+
+    // 释放互斥锁并关闭句柄
+    if (m_hSharedMemoryMutex)
+    {
+        ReleaseMutex(m_hSharedMemoryMutex);
+        CloseHandle(m_hSharedMemoryMutex);
+        m_hSharedMemoryMutex = nullptr;
+    }
+}

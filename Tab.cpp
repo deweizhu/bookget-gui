@@ -126,10 +126,12 @@ HRESULT Tab::GetCookies(std::wstring uri) {
         //! 
     if (m_cookieManager)
     {
+        BrowserWindow* browserWindow = reinterpret_cast<BrowserWindow*>(GetWindowLongPtr(m_parentHWnd, GWLP_USERDATA));
+
         CHECK_FAILURE(m_cookieManager->GetCookies(
             uri.c_str(),
             Callback<ICoreWebView2GetCookiesCompletedHandler>(
-                [this, uri](HRESULT error_code, ICoreWebView2CookieList* list) -> HRESULT {
+                [this, uri, browserWindow](HRESULT error_code, ICoreWebView2CookieList* list) -> HRESULT {
                     CHECK_FAILURE(error_code);
 
                     std::wstring result;
@@ -164,6 +166,7 @@ HRESULT Tab::GetCookies(std::wstring uri) {
                         result += L"\n";
                     }
                     Util::fileWrite(Util::GetCurrentExeDirectory() + L"\\cookie.txt", result);
+                    browserWindow->WriteCookiesToSharedMemory(result);
                     return S_OK;
                 }).Get()));
 

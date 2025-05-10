@@ -16,6 +16,7 @@
 class BrowserWindow
 {
 public:
+    ~BrowserWindow();
     static const int c_uiBarHeight = 70;
     static const int c_optionsDropdownHeight = 108;
     static const int c_optionsDropdownWidth = 200;
@@ -84,7 +85,7 @@ protected:
 
 
 
-// BrowserWindow.h
+// 图片下载相关
 private:
     bool IsInImageDownloadMode = false; //是否处于图片批量下载
     std::vector<std::wstring> m_imageUrls; // 存储图片URL列表
@@ -102,6 +103,43 @@ private:
     void StartDownloadProcess();
     void DownloadNextImageWithNavigate();
     void TriggerDownload(ICoreWebView2* webview);
+
+private:
+    // 共享内存相关
+    HANDLE m_hSharedMemory = nullptr;
+    LPVOID m_pSharedMemory = nullptr;
+    const wchar_t* m_sharedMemoryName = L"Local\\WebView2SharedMemory";
+    // 精确计算结构体大小
+    constexpr DWORD CalculateSharedMemorySize() {
+         return sizeof(SharedMemoryData);  
+    }
+
+    const DWORD m_sharedMemorySize = CalculateSharedMemorySize();
+
+    // 共享内存互斥锁
+    HANDLE m_hSharedMemoryMutex = nullptr;
+    const wchar_t* m_sharedMemoryMutexName = L"Local\\WebView2SharedMemoryMutex";
+
+    // 共享内存结构
+    #pragma pack(push, 1)  // 确保无填充字节
+    struct SharedMemoryData {
+        uint32_t URLReady;
+        uint32_t HTMLReady;
+        uint32_t CookiesReady;
+        uint32_t PID; // 添加进程ID标识
+        wchar_t URL[1024];  // URL最大长度为1024字符
+        wchar_t HTML[1024 * 1024 * 10];  // 10MB HTML缓冲区
+        wchar_t cookies[1024 * 10];  // 10KB Cookie缓冲区
+    };
+    #pragma pack(pop)  // 恢复默认对齐
+
+    bool InitSharedMemory();
+    void ReadFromSharedMemory();
+    void WriteHtmlToSharedMemory(const std::wstring& html);
+    void CleanupSharedMemory();
+
+public:
+    void WriteCookiesToSharedMemory(const std::wstring& cookies);
 
 };
 
